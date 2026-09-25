@@ -25,6 +25,7 @@
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body {
     margin: 0;
@@ -95,6 +96,18 @@
   #clear { padding: 4px 8px; font-size: 12px; margin-left: 8px; }
   .supported { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
   .supported b { color: var(--text); font-weight: 500; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tools button { padding: 9px 12px; font-size: 13px; }
+  #favForm { display: flex; gap: 8px; flex-wrap: wrap; }
+  #favName { flex: 1 1 200px; min-width: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 14px var(--display); }
+  #favName:focus-visible, #chanFilter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .rowline { display: flex; align-items: center; gap: 4px; }
+  .rowline .item { flex: 1; min-width: 0; }
+  .del { flex: none; padding: 6px 10px; font-size: 13px; color: var(--muted); background: transparent; border-color: transparent; }
+  .del:hover { color: var(--bad); }
+  #chanFilter { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 14px var(--display); margin-bottom: 8px; }
+  .scroll { max-height: 420px; overflow-y: auto; }
+  .item img { flex: none; width: 28px; height: 28px; object-fit: contain; border-radius: 4px; background: #fff1; }
   @media (prefers-reduced-motion: no-preference) { .item, button { transition: background .15s, filter .15s; } }
 </style>
 </head>
@@ -111,6 +124,17 @@
     <button id="play" type="submit">Guarda</button>
   </form>
 
+  <div class="tools">
+    <button id="favBtn" type="button">☆ Salva nei preferiti</button>
+    <button id="castBtn" type="button" hidden>📺 Trasmetti alla TV</button>
+    <button id="tvBtn" type="button">Canali TV gratuiti</button>
+  </div>
+  <form id="favForm" hidden>
+    <input id="favName" type="text" placeholder="Nome del preferito" aria-label="Nome del preferito">
+    <button type="submit" id="favSave">Salva</button>
+    <button type="button" id="favCancel">Annulla</button>
+  </form>
+
   <div class="screen" id="screen">
     <div class="empty" id="empty">
       <strong>Nessun video in riproduzione</strong>
@@ -123,6 +147,12 @@
     <span id="msg"></span>
   </div>
 
+  <section id="chan" hidden>
+    <h2>Canali <span id="chanCount"></span></h2>
+    <input id="chanFilter" type="search" placeholder="Cerca un canale…" aria-label="Cerca un canale">
+    <ul id="chanList" class="scroll"></ul>
+  </section>
+
   <section id="found" hidden>
     <h2>Video trovati nella pagina</h2>
     <ul id="foundList"></ul>
@@ -130,7 +160,9 @@
 
   <div class="cols">
     <section>
-      <h2>Recenti <button id="clear" type="button">Svuota</button></h2>
+      <h2>Preferiti</h2>
+      <ul id="favs"></ul>
+      <h2 style="margin-top:16px">Recenti <button id="clear" type="button">Svuota</button></h2>
       <ul id="recent"></ul>
     </section>
     <section>
@@ -141,6 +173,7 @@
         <div><b>YouTube</b> video, Shorts e dirette · <b>Vimeo</b> · <b>Dailymotion</b> · <b>Twitch</b> canali e VOD</div>
         <div><b>File diretti</b> .mp4 .webm .mov .ogg .mp3 · <b>Stream HLS</b> .m3u8 · <b>DASH</b> .mpd</div>
         <div><b>Pagine web</b>: se incolli il link di una pagina, l'app cerca i video al suo interno (stream, file e player incorporati).</div>
+        <div><b>Liste di canali</b> .m3u: le apre e ti fa scegliere il canale. <b>Trasmetti alla TV</b> funziona con Chromecast sulla stessa rete Wi-Fi.</div>
         <div>Non funzionano i contenuti protetti (Netflix, Prime, Disney+, RaiPlay con DRM) né i siti che vietano l'incorporamento.</div>
       </div>
     </section>
@@ -151,19 +184,24 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const screen = $("screen"), emptyEl = $("empty"), input = $("url"), msg = $("msg"), kindChip = $("kind");
-  let hls = null, dash = null;
+  let hls = null, dash = null, current = null;
+  const TV_LIST = "https://iptv-org.github.io/iptv/countries/it.m3u";
 
   const SAMPLES = [
     ["HLS", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"],
     ["MP4", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"],
     ["DASH", "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd"],
     ["YouTube", "https://www.youtube.com/watch?v=aqz-KE-bpKQ"],
+    ["Lista TV", TV_LIST],
   ];
 
   // ---- storage (optional) ----
   const KEY = "proiettore.recent";
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
   const save = (list) => { try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, 12))); } catch {} };
+  const FKEY = "proiettore.preferiti";
+  const loadFav = () => { try { return JSON.parse(localStorage.getItem(FKEY)) || []; } catch { return []; } };
+  const saveFav = (list) => { try { localStorage.setItem(FKEY, JSON.stringify(list)); } catch {} };
 
   // ---- link detection ----
   function detect(raw) {
@@ -203,6 +241,7 @@
       return null;
     }
     const low = (path + u.search).toLowerCase();
+    if (/\.m3u(\?|$)/.test(low) || /[?&]type=m3u/.test(low)) return { kind: "Lista", list: u.href };
     if (/\.m3u8(\?|$)/.test(low) || low.includes(".m3u8")) return { kind: "HLS", src: u.href };
     if (/\.mpd(\?|$)/.test(low)) return { kind: "DASH", src: u.href };
     if (/\.(mp3|m4a|aac|wav|flac|opus)(\?|$)/.test(low)) return { kind: "Audio", src: u.href };
@@ -220,14 +259,17 @@
     if (hls) { hls.destroy(); hls = null; }
     if (dash) { dash.reset(); dash = null; }
     screen.querySelectorAll("video, iframe").forEach((el) => { if (el.pause) el.pause(); el.remove(); });
+    $("castBtn").hidden = true; current = null;
     emptyEl.hidden = true;
   }
   function say(text, bad) { msg.textContent = text; msg.className = bad ? "bad" : ""; }
 
-  function play(raw, forceDirect) {
-    const info = detect(raw);
+  function play(raw, forceDirect, forceKind) {
+    let info = detect(raw);
     if (!info) { say("Questo non sembra un link valido. Controlla che inizi con https://", true); return; }
+    if (forceKind) info = { kind: forceKind, src: raw.trim() };
     scanId++;
+    if (info.list) { loadList(info.list); return; }
     if (info.kind === "File" && !info.direct && !forceDirect) { scan(raw.trim()); return; }
     reset();
     kindChip.textContent = info.kind; kindChip.className = "chip on";
@@ -247,6 +289,8 @@
     const v = document.createElement("video");
     v.controls = true; v.autoplay = true; v.playsInline = true;
     screen.appendChild(v);
+    current = { v, info };
+    if ("remote" in v) $("castBtn").hidden = false;
     v.addEventListener("playing", () => say("In riproduzione."), { once: true });
     v.addEventListener("error", () => {
       if (info.kind === "File" && !forceDirect) scan(raw.trim()); else failed(info);
@@ -368,6 +412,107 @@
     else say(`Ho trovato ${list.length} video nella pagina: tocca quello che vuoi guardare.`);
   }
 
+  // ---- liste di canali (.m3u) ----
+  function parseM3U(text, base) {
+    const out = []; let cur = null;
+    for (const line of text.split(/\r?\n/)) {
+      const l = line.trim();
+      if (!l) continue;
+      if (l.startsWith("#EXTINF")) {
+        cur = {
+          name: l.slice(l.lastIndexOf(",") + 1).trim() || "Canale",
+          logo: (l.match(/tvg-logo="([^"]*)"/) || [])[1] || "",
+          group: ((l.match(/group-title="([^"]*)"/) || [])[1] || "").split(";")[0],
+        };
+      } else if (!l.startsWith("#")) {
+        try { out.push({ ...(cur || { name: l, logo: "", group: "" }), url: new URL(l, base).href }); } catch {}
+        cur = null;
+      }
+    }
+    return out;
+  }
+  let channels = [];
+  async function loadList(url) {
+    const id = scanId;
+    reset(); emptyEl.hidden = false; showFound([]);
+    kindChip.textContent = "Lista"; kindChip.className = "chip on";
+    remember(url, "Lista");
+    say("Carico la lista dei canali…");
+    let text = "";
+    try { const r = await fetch(url); if (r.ok) text = await r.text(); } catch {}
+    if (!text) { const res = await fetchPage(url); text = res && res.text || ""; }
+    if (id !== scanId) return;
+    if (!text) { say("Non riesco a scaricare questa lista. Controlla il link o riprova più tardi.", true); return; }
+    if (/#EXT-X-(TARGETDURATION|STREAM-INF|MEDIA-SEQUENCE)/.test(text)) { play(url, true, "HLS"); return; }
+    channels = parseM3U(text, url);
+    if (!channels.length) { say("La lista è vuota o non è una lista di canali.", true); return; }
+    $("chanFilter").value = "";
+    renderChannels();
+    $("chan").hidden = false;
+    say(`Lista caricata: ${channels.length} canali. Toccane uno per guardarlo.`);
+  }
+  function renderChannels() {
+    const q = $("chanFilter").value.trim().toLowerCase();
+    const list = q ? channels.filter((c) => (c.name + " " + c.group).toLowerCase().includes(q)) : channels;
+    const ul = $("chanList"); ul.innerHTML = "";
+    list.slice(0, 300).forEach((c) => ul.appendChild(row(c.group || "TV", c.url, true, c.name, c.logo)));
+    if (!list.length) ul.innerHTML = `<li class="none">Nessun canale trovato.</li>`;
+    $("chanCount").textContent = q ? `(${list.length} di ${channels.length})` : `(${channels.length})`;
+  }
+  $("chanFilter").addEventListener("input", renderChannels);
+  $("tvBtn").onclick = () => { input.value = TV_LIST; go(TV_LIST); };
+
+  // ---- trasmetti alla TV ----
+  $("castBtn").onclick = async () => {
+    if (!current) return;
+    const { v, info } = current;
+    // Chromecast non può ricevere lo stream gestito da hls.js: passo al lettore nativo del telefono.
+    if (hls && v.canPlayType("application/vnd.apple.mpegurl")) {
+      const t = v.currentTime; hls.destroy(); hls = null;
+      v.src = info.src; v.currentTime = t; v.play().catch(() => {});
+    }
+    try { await v.remote.prompt(); say("Scegli la TV dall'elenco."); }
+    catch (e) {
+      say(e.name === "NotSupportedError"
+        ? "Questo video non si può trasmettere da qui. Con YouTube usa il pulsante di trasmissione dentro il player."
+        : "Nessuna TV trovata. Il Chromecast o la TV devono essere accesi e sulla stessa rete Wi-Fi del telefono.", true);
+    }
+  };
+
+  // ---- preferiti ----
+  $("favBtn").onclick = () => {
+    const u = input.value.trim();
+    if (!/^https?:\/\//i.test(u)) { say("Prima incolla un link, poi salvalo nei preferiti.", true); input.focus(); return; }
+    let name = u;
+    try { const x = new URL(u); name = x.hostname.replace(/^www\./, "") + (x.pathname.length > 1 ? x.pathname.replace(/\/$/, "").split("/").pop().slice(0, 30).replace(/^/, " · ") : ""); } catch {}
+    $("favName").value = name;
+    $("favForm").hidden = false; $("favName").focus(); $("favName").select();
+  };
+  $("favCancel").onclick = () => { $("favForm").hidden = true; };
+  $("favForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const u = input.value.trim(), name = $("favName").value.trim() || u;
+    const info = detect(u);
+    const list = loadFav().filter((x) => x.url !== u);
+    list.unshift({ url: u, name, kind: info ? info.kind : "Link" });
+    saveFav(list); renderFavs();
+    $("favForm").hidden = true;
+    say(`Salvato nei preferiti: ${name}`);
+  });
+  function renderFavs() {
+    const ul = $("favs"); ul.innerHTML = "";
+    const list = loadFav();
+    if (!list.length) { ul.innerHTML = `<li class="none">Tocca ☆ per salvare qui i link che usi spesso.</li>`; return; }
+    list.forEach((x) => {
+      const li = row(x.kind, x.url, false, x.name);
+      li.className = "rowline";
+      const d = document.createElement("button");
+      d.type = "button"; d.className = "del"; d.textContent = "✕"; d.setAttribute("aria-label", "Togli " + x.name + " dai preferiti");
+      d.onclick = () => { saveFav(loadFav().filter((y) => y.url !== x.url)); renderFavs(); };
+      li.appendChild(d); ul.appendChild(li);
+    });
+  }
+
   function failed(info, detail) {
     const open = `<a href="${escapeAttr(input.value.trim())}" target="_blank" rel="noopener">aprirlo nella sua pagina</a>`;
     if (info.kind === "File" || info.kind === "Audio")
@@ -384,13 +529,18 @@
     const list = load().filter((x) => x.url !== url);
     list.unshift({ url, kind }); save(list); renderRecent();
   }
-  function row(kind, url, keepPage) {
+  function row(kind, url, keepPage, label, logo) {
     const li = document.createElement("li");
     const b = document.createElement("button");
     b.type = "button"; b.className = "item"; b.title = url;
     b.innerHTML = `<span class="kind"></span><span class="u"></span>`;
-    b.children[0].textContent = kind; b.children[1].textContent = url;
-    b.onclick = () => { if (!keepPage) { input.value = url; showFound([]); } play(url, keepPage); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    b.children[0].textContent = kind; b.children[1].textContent = label || url;
+    if (logo && /^https:/.test(logo)) {
+      const img = document.createElement("img");
+      img.src = logo; img.alt = ""; img.loading = "lazy"; img.onerror = () => img.remove();
+      b.insertBefore(img, b.children[1]);
+    }
+    b.onclick = () => { if (!keepPage) { input.value = url; showFound([]); $("chan").hidden = true; } play(url, keepPage); window.scrollTo({ top: 0, behavior: "smooth" }); };
     li.appendChild(b); return li;
   }
   function renderRecent() {
@@ -400,10 +550,10 @@
     list.forEach((x) => ul.appendChild(row(x.kind, x.url)));
   }
   SAMPLES.forEach(([k, u]) => $("samples").appendChild(row(k, u)));
-  renderRecent();
+  renderRecent(); renderFavs();
 
   // ---- input ----
-  const go = (u) => { showFound([]); play(u); };
+  const go = (u) => { showFound([]); $("chan").hidden = true; play(u); };
   $("f").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) go(input.value); else input.focus(); });
   $("clear").onclick = () => { save([]); renderRecent(); };
   $("pasteBtn").onclick = async () => {
