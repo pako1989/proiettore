@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Proiettore</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="data:image/png;base64,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">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
@@ -128,6 +132,7 @@
     <button id="favBtn" type="button">☆ Salva nei preferiti</button>
     <button id="castBtn" type="button" hidden>📺 Trasmetti alla TV</button>
     <button id="tvBtn" type="button">Canali TV gratuiti</button>
+    <button id="installBtn" type="button" hidden>⤓ Installa l'app</button>
   </div>
   <form id="favForm" hidden>
     <input id="favName" type="text" placeholder="Nome del preferito" aria-label="Nome del preferito">
@@ -566,9 +571,29 @@
     if (t && /^https?:\/\//i.test(t.trim())) { input.value = t.trim(); go(t); }
   });
 
-  // Link passato come ?v=... (es. da una scorciatoia)
-  const qs = new URLSearchParams(location.search).get("v");
-  if (qs) { input.value = qs; go(qs); }
+  // Link arrivato da "Condividi" (url, text, title) o passato come ?v=...
+  const sp = new URLSearchParams(location.search);
+  const firstLink = (t) => (t && (t.match(/https?:\/\/[^\s<>"']+/) || [])[0]) || "";
+  const shared = firstLink(sp.get("v")) || firstLink(sp.get("url")) || firstLink(sp.get("text")) || firstLink(sp.get("title"));
+  if (shared) {
+    input.value = shared; go(shared);
+    try { history.replaceState(null, "", location.pathname); } catch {}
+  } else if (sp.has("text") || sp.has("url")) {
+    say("Nel contenuto condiviso non c'è un link. Condividi il link del video.", true);
+  }
+
+  // ---- installazione come app ----
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  let installEvt = null;
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; $("installBtn").hidden = false; });
+  window.addEventListener("appinstalled", () => { $("installBtn").hidden = true; say("App installata: la trovi tra le app del telefono, e in Condividi."); });
+  $("installBtn").onclick = async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    const { outcome } = await installEvt.userChoice.catch(() => ({}));
+    if (outcome === "accepted") $("installBtn").hidden = true;
+    installEvt = null;
+  };
 })();
 </script>
 </body>
