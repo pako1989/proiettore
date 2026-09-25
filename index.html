@@ -122,6 +122,11 @@
     <span id="msg"></span>
   </div>
 
+  <section id="found" hidden>
+    <h2>Video trovati nella pagina</h2>
+    <ul id="foundList"></ul>
+  </section>
+
   <div class="cols">
     <section>
       <h2>Recenti <button id="clear" type="button">Svuota</button></h2>
@@ -134,6 +139,7 @@
       <div class="supported">
         <div><b>YouTube</b> video, Shorts e dirette · <b>Vimeo</b> · <b>Dailymotion</b> · <b>Twitch</b> canali e VOD</div>
         <div><b>File diretti</b> .mp4 .webm .mov .ogg .mp3 · <b>Stream HLS</b> .m3u8 · <b>DASH</b> .mpd</div>
+        <div><b>Pagine web</b>: se incolli il link di una pagina, l'app cerca i video al suo interno (stream, file e player incorporati).</div>
         <div>Non funzionano i contenuti protetti (Netflix, Prime, Disney+, RaiPlay con DRM) né i siti che vietano l'incorporamento.</div>
       </div>
     </section>
@@ -199,7 +205,7 @@
     if (/\.m3u8(\?|$)/.test(low) || low.includes(".m3u8")) return { kind: "HLS", src: u.href };
     if (/\.mpd(\?|$)/.test(low)) return { kind: "DASH", src: u.href };
     if (/\.(mp3|m4a|aac|wav|flac|opus)(\?|$)/.test(low)) return { kind: "Audio", src: u.href };
-    return { kind: "File", src: u.href };
+    return { kind: "File", src: u.href, direct: /\.(mp4|webm|mov|m4v|ogv|ogg|mkv)(\?|$)/.test(low) };
   }
   function parseTime(t) {
     if (!t) return 0;
@@ -217,9 +223,11 @@
   }
   function say(text, bad) { msg.textContent = text; msg.className = bad ? "bad" : ""; }
 
-  function play(raw) {
+  function play(raw, forceDirect) {
     const info = detect(raw);
     if (!info) { say("Questo non sembra un link valido. Controlla che inizi con https://", true); return; }
+    scanId++;
+    if (info.kind === "File" && !info.direct && !forceDirect) { scan(raw.trim()); return; }
     reset();
     kindChip.textContent = info.kind; kindChip.className = "chip on";
     remember(raw.trim(), info.kind);
@@ -261,10 +269,87 @@
     v.play().catch(() => {});
   }
 
+  // ---- ricerca dei video dentro una pagina web ----
+  // Il browser non può leggere pagine di altri siti da solo: passa da un servizio di lettura pubblico.
+  const PROXIES = [
+    (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+    (u) => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+    (u) => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
+  ];
+  let scanId = 0;
+
+  async function fetchPage(url) {
+    for (const proxy of PROXIES) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 12000);
+      try {
+        const r = await fetch(proxy(url), { signal: ctl.signal });
+        if (!r.ok) continue;
+        const type = r.headers.get("content-type") || "";
+        const size = +r.headers.get("content-length") || 0;
+        if (/^(video|audio)\//.test(type) || /mpegurl|dash\+xml/.test(type) || size > 5e6) { ctl.abort(); return { media: true }; }
+        const text = await r.text();
+        if (text) return { text };
+      } catch {} finally { clearTimeout(timer); }
+    }
+    return null;
+  }
+
+  function extract(html, base) {
+    const text = html.replace(/\\u002[fF]/g, "/").replace(/\\\//g, "/").replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+    const found = new Map();
+    const add = (raw) => {
+      if (!raw) return;
+      let u;
+      try { u = new URL(raw.trim(), base).href; } catch { return; }
+      if (!/^https?:/.test(u) || u === base) return;
+      const info = detect(u);
+      if (!info || (info.kind === "File" && !info.direct)) return;
+      if (!found.has(u)) found.set(u, info.kind);
+    };
+    for (const m of text.matchAll(/https?:\/\/[^\s"'<>\\()]+?\.(?:m3u8|mpd|mp4|webm|m4v|mov)(?:\?[^\s"'<>\\()]*)?(?=["'\s<>\\)]|$)/gi)) add(m[0]);
+    for (const m of text.matchAll(/https?:\/\/(?:www\.)?(?:youtube(?:-nocookie)?\.com\/embed\/[\w-]+|youtu\.be\/[\w-]+|player\.vimeo\.com\/video\/\d+|(?:www\.)?dailymotion\.com\/embed\/video\/\w+)/gi)) add(m[0]);
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("video[src], source[src]").forEach((e) => add(e.getAttribute("src")));
+    doc.querySelectorAll('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[name="twitter:player:stream"]').forEach((e) => add(e.getAttribute("content")));
+    doc.querySelectorAll("iframe").forEach((e) => add(e.getAttribute("src") || e.getAttribute("data-src")));
+    const order = { HLS: 0, DASH: 1, File: 2 };
+    return [...found].map(([url, kind]) => ({ url, kind })).sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3));
+  }
+
+  function showFound(list) {
+    const ul = $("foundList"); ul.innerHTML = "";
+    list.forEach((x) => ul.appendChild(row(x.kind, x.url, true)));
+    $("found").hidden = !list.length;
+  }
+
+  async function scan(url) {
+    const id = scanId;
+    reset(); emptyEl.hidden = false; showFound([]);
+    kindChip.textContent = "Pagina"; kindChip.className = "chip on";
+    remember(url, "Pagina");
+    say("Cerco i video dentro la pagina…");
+    const res = await fetchPage(url);
+    if (id !== scanId) return;
+    if (!res || res.media) {
+      if (!res) say("Non riesco a leggere la pagina. Provo ad aprire il link come video…");
+      play(url, true); return;
+    }
+    const list = extract(res.text, url);
+    if (id !== scanId) return;
+    if (!list.length) {
+      say("Non ho trovato video in questa pagina. Molti siti caricano il video solo dopo, con i loro script, oppure lo proteggono: in quel caso da qui non si vede.", true);
+      return;
+    }
+    showFound(list);
+    if (list.length === 1) { play(list[0].url); say("Ho trovato un video nella pagina e lo sto aprendo."); }
+    else say(`Ho trovato ${list.length} video nella pagina: tocca quello che vuoi guardare.`);
+  }
+
   function failed(info, detail) {
     const open = `<a href="${escapeAttr(input.value.trim())}" target="_blank" rel="noopener">aprirlo nella sua pagina</a>`;
     if (info.kind === "File" || info.kind === "Audio")
-      msg.innerHTML = `Non riesco a riprodurre questo link. Probabilmente è una pagina web e non un file video, oppure il formato non è supportato dal browser. Prova ad ${open}.`;
+      msg.innerHTML = `Non riesco a riprodurre questo link: il formato non è supportato dal browser oppure il sito blocca la visione altrove. Prova ad ${open}.`;
     else
       msg.innerHTML = `Lo stream non parte${detail ? " (" + escapeHtml(detail) + ")" : ""}. Il server potrebbe bloccare la riproduzione da altri siti o il contenuto è protetto. Prova ad ${open}.`;
     msg.className = "bad";
@@ -277,13 +362,13 @@
     const list = load().filter((x) => x.url !== url);
     list.unshift({ url, kind }); save(list); renderRecent();
   }
-  function row(kind, url) {
+  function row(kind, url, keepPage) {
     const li = document.createElement("li");
     const b = document.createElement("button");
     b.type = "button"; b.className = "item"; b.title = url;
     b.innerHTML = `<span class="kind"></span><span class="u"></span>`;
     b.children[0].textContent = kind; b.children[1].textContent = url;
-    b.onclick = () => { input.value = url; play(url); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    b.onclick = () => { if (!keepPage) { input.value = url; showFound([]); } play(url); window.scrollTo({ top: 0, behavior: "smooth" }); };
     li.appendChild(b); return li;
   }
   function renderRecent() {
@@ -296,21 +381,22 @@
   renderRecent();
 
   // ---- input ----
-  $("f").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) play(input.value); else input.focus(); });
+  const go = (u) => { showFound([]); play(u); };
+  $("f").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) go(input.value); else input.focus(); });
   $("clear").onclick = () => { save([]); renderRecent(); };
   $("pasteBtn").onclick = async () => {
-    try { const t = await navigator.clipboard.readText(); if (t) { input.value = t.trim(); play(t); } }
+    try { const t = await navigator.clipboard.readText(); if (t) { input.value = t.trim(); go(t); } }
     catch { input.focus(); say("Tieni premuto nel campo e scegli Incolla."); }
   };
   document.addEventListener("paste", (e) => {
-    if (e.target === input) { setTimeout(() => input.value.trim() && play(input.value), 0); return; }
+    if (e.target === input) { setTimeout(() => input.value.trim() && go(input.value), 0); return; }
     const t = (e.clipboardData || window.clipboardData).getData("text");
-    if (t && /^https?:\/\//i.test(t.trim())) { input.value = t.trim(); play(t); }
+    if (t && /^https?:\/\//i.test(t.trim())) { input.value = t.trim(); go(t); }
   });
 
   // Link passato come ?v=... (es. da una scorciatoia)
   const qs = new URLSearchParams(location.search).get("v");
-  if (qs) { input.value = qs; play(qs); }
+  if (qs) { input.value = qs; go(qs); }
 })();
 </script>
 </body>
