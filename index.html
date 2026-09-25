@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Proiettore</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --panel: #171a21;
+    --line: #262a34;
+    --text: #e9e6df;
+    --muted: #8c8f99;
+    --accent: #f2b544;
+    --accent-ink: #1b1403;
+    --bad: #ff7a6b;
+    --ok: #7fd6a4;
+    --display: "Bricolage Grotesque", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 var(--display);
+    padding-inline: max(16px, env(safe-area-inset-left, 0px));
+    padding-block: max(16px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-bottom, 0px));
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 18px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  .hint { color: var(--muted); font-size: 13px; }
+
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  #url {
+    flex: 1 1 280px; min-width: 0;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 13px 14px; font: 14px var(--mono);
+  }
+  #url:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  button {
+    font: 600 14px var(--display); border-radius: 10px; cursor: pointer;
+    padding: 12px 16px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #play { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  #play:hover { filter: brightness(1.07); }
+
+  .screen {
+    position: relative; width: 100%; max-width: 100%; aspect-ratio: 16 / 9;
+    background: #000; border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .screen video, .screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+  .empty {
+    position: absolute; inset: 0; display: grid; place-content: center; gap: 6px;
+    text-align: center; color: var(--muted); padding: 16px;
+    background:
+      repeating-linear-gradient(90deg, transparent 0 22px, rgba(255,255,255,.025) 22px 23px),
+      #07080a;
+  }
+  .empty strong { color: var(--text); font-size: 18px; }
+
+  .status { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; min-height: 22px; }
+  .chip { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+  #msg { color: var(--muted); }
+  #msg.bad { color: var(--bad); }
+  #msg a { color: var(--accent); }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+  section h2 { margin: 0 0 8px; font-size: 12px; font-weight: 500; font-family: var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .item {
+    display: flex; gap: 10px; align-items: center; width: 100%; text-align: left;
+    padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent;
+    font: 13px var(--mono); color: var(--text);
+  }
+  .item:hover { background: var(--panel); border-color: var(--line); }
+  .item .kind { flex: none; width: 70px; color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .item .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .none { color: var(--muted); font-size: 13px; padding: 6px 10px; }
+  #clear { padding: 4px 8px; font-size: 12px; margin-left: 8px; }
+  .supported { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  .supported b { color: var(--text); font-weight: 500; }
+  @media (prefers-reduced-motion: no-preference) { .item, button { transition: background .15s, filter .15s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Proiettore<span>.</span></h1>
+    <div class="hint">Incolla un link e premi Guarda. Funziona anche con Ctrl+V ovunque nella pagina.</div>
+  </header>
+
+  <form id="f" autocomplete="off" novalidate>
+    <input id="url" type="url" inputmode="url" placeholder="https://… (YouTube, Vimeo, .mp4, .m3u8, …)" aria-label="Link del video">
+    <button id="pasteBtn" type="button">Incolla</button>
+    <button id="play" type="submit">Guarda</button>
+  </form>
+
+  <div class="screen" id="screen">
+    <div class="empty" id="empty">
+      <strong>Nessun video in riproduzione</strong>
+      <span>Incolla un link qui sopra, oppure prova uno degli esempi in basso.</span>
+    </div>
+  </div>
+
+  <div class="status">
+    <span class="chip" id="kind">—</span>
+    <span id="msg"></span>
+  </div>
+
+  <div class="cols">
+    <section>
+      <h2>Recenti <button id="clear" type="button">Svuota</button></h2>
+      <ul id="recent"></ul>
+    </section>
+    <section>
+      <h2>Esempi da provare</h2>
+      <ul id="samples"></ul>
+      <h2 style="margin-top:16px">Cosa riesce a riprodurre</h2>
+      <div class="supported">
+        <div><b>YouTube</b> video, Shorts e dirette · <b>Vimeo</b> · <b>Dailymotion</b> · <b>Twitch</b> canali e VOD</div>
+        <div><b>File diretti</b> .mp4 .webm .mov .ogg .mp3 · <b>Stream HLS</b> .m3u8 · <b>DASH</b> .mpd</div>
+        <div>Non funzionano i contenuti protetti (Netflix, Prime, Disney+, RaiPlay con DRM) né i siti che vietano l'incorporamento.</div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const screen = $("screen"), emptyEl = $("empty"), input = $("url"), msg = $("msg"), kindChip = $("kind");
+  let hls = null, dash = null;
+
+  const SAMPLES = [
+    ["HLS", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"],
+    ["MP4", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"],
+    ["DASH", "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd"],
+    ["YouTube", "https://www.youtube.com/watch?v=aqz-KE-bpKQ"],
+  ];
+
+  // ---- storage (optional) ----
+  const KEY = "proiettore.recent";
+  const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
+  const save = (list) => { try { localStorage.setItem(KEY, JSON.stringify(list.slice(0, 12))); } catch {} };
+
+  // ---- link detection ----
+  function detect(raw) {
+    let u;
+    try { u = new URL(raw.trim()); } catch { return null; }
+    const host = u.hostname.replace(/^www\.|^m\./, "");
+    const path = u.pathname;
+
+    if (host === "youtu.be" || host.endsWith("youtube.com") || host === "youtube-nocookie.com") {
+      let id = host === "youtu.be" ? path.slice(1).split("/")[0] : u.searchParams.get("v");
+      const m = path.match(/^\/(shorts|live|embed|v)\/([\w-]{6,})/);
+      if (!id && m) id = m[2];
+      const list = u.searchParams.get("list");
+      if (!id && list) return { kind: "YouTube", embed: `https://www.youtube-nocookie.com/embed/videoseries?list=${encodeURIComponent(list)}&autoplay=1` };
+      if (!id) return null;
+      const t = parseTime(u.searchParams.get("t") || u.searchParams.get("start"));
+      return { kind: "YouTube", embed: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1${t ? "&start=" + t : ""}` };
+    }
+    if (host.endsWith("vimeo.com")) {
+      const m = path.match(/(\d{5,})(?:\/(\w+))?/);
+      if (!m) return null;
+      return { kind: "Vimeo", embed: `https://player.vimeo.com/video/${m[1]}?autoplay=1${m[2] ? "&h=" + m[2] : ""}` };
+    }
+    if (host.endsWith("dailymotion.com") || host === "dai.ly") {
+      const m = host === "dai.ly" ? [0, path.slice(1)] : path.match(/\/video\/([a-z0-9]+)/i);
+      if (!m) return null;
+      return { kind: "Dailymotion", embed: `https://www.dailymotion.com/embed/video/${m[1]}?autoplay=1` };
+    }
+    if (host.endsWith("twitch.tv")) {
+      const parent = location.hostname || "localhost";
+      const vod = path.match(/\/videos\/(\d+)/);
+      const clip = host.startsWith("clips.") ? path.slice(1) : (path.match(/\/clip\/([\w-]+)/) || [])[1];
+      if (vod) return { kind: "Twitch", embed: `https://player.twitch.tv/?video=${vod[1]}&parent=${parent}` };
+      if (clip) return { kind: "Twitch", embed: `https://clips.twitch.tv/embed?clip=${clip}&parent=${parent}` };
+      const ch = path.split("/")[1];
+      if (ch) return { kind: "Twitch", embed: `https://player.twitch.tv/?channel=${ch}&parent=${parent}` };
+      return null;
+    }
+    const low = (path + u.search).toLowerCase();
+    if (/\.m3u8(\?|$)/.test(low) || low.includes(".m3u8")) return { kind: "HLS", src: u.href };
+    if (/\.mpd(\?|$)/.test(low)) return { kind: "DASH", src: u.href };
+    if (/\.(mp3|m4a|aac|wav|flac|opus)(\?|$)/.test(low)) return { kind: "Audio", src: u.href };
+    return { kind: "File", src: u.href };
+  }
+  function parseTime(t) {
+    if (!t) return 0;
+    if (/^\d+$/.test(t)) return +t;
+    const m = t.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+    return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0;
+  }
+
+  // ---- player ----
+  function reset() {
+    if (hls) { hls.destroy(); hls = null; }
+    if (dash) { dash.reset(); dash = null; }
+    screen.querySelectorAll("video, iframe").forEach((el) => { if (el.pause) el.pause(); el.remove(); });
+    emptyEl.hidden = true;
+  }
+  function say(text, bad) { msg.textContent = text; msg.className = bad ? "bad" : ""; }
+
+  function play(raw) {
+    const info = detect(raw);
+    if (!info) { say("Questo non sembra un link valido. Controlla che inizi con https://", true); return; }
+    reset();
+    kindChip.textContent = info.kind; kindChip.className = "chip on";
+    remember(raw.trim(), info.kind);
+
+    if (info.embed) {
+      const f = document.createElement("iframe");
+      f.src = info.embed;
+      f.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+      f.allowFullscreen = true;
+      f.referrerPolicy = "strict-origin-when-cross-origin";
+      screen.appendChild(f);
+      say(`Lettore ${info.kind} caricato. Se appare un errore, il proprietario del video ha bloccato la visione fuori dal sito.`);
+      return;
+    }
+
+    const v = document.createElement("video");
+    v.controls = true; v.autoplay = true; v.playsInline = true;
+    screen.appendChild(v);
+    v.addEventListener("playing", () => say("In riproduzione."), { once: true });
+    v.addEventListener("error", () => failed(info), { once: true });
+
+    if (info.kind === "HLS") {
+      if (window.Hls && Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true });
+        hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) failed(info, d.details); });
+        hls.loadSource(info.src); hls.attachMedia(v);
+      } else if (v.canPlayType("application/vnd.apple.mpegurl")) {
+        v.src = info.src;
+      } else { say("Questo browser non supporta gli stream HLS e la libreria non si è caricata. Controlla la connessione.", true); return; }
+    } else if (info.kind === "DASH") {
+      if (!window.dashjs) { say("Il lettore DASH non si è caricato. Controlla la connessione e riprova.", true); return; }
+      dash = dashjs.MediaPlayer().create();
+      dash.on("error", () => failed(info));
+      dash.initialize(v, info.src, true);
+    } else {
+      v.src = info.src;
+    }
+    say("Caricamento…");
+    v.play().catch(() => {});
+  }
+
+  function failed(info, detail) {
+    const open = `<a href="${escapeAttr(input.value.trim())}" target="_blank" rel="noopener">aprirlo nella sua pagina</a>`;
+    if (info.kind === "File" || info.kind === "Audio")
+      msg.innerHTML = `Non riesco a riprodurre questo link. Probabilmente è una pagina web e non un file video, oppure il formato non è supportato dal browser. Prova ad ${open}.`;
+    else
+      msg.innerHTML = `Lo stream non parte${detail ? " (" + escapeHtml(detail) + ")" : ""}. Il server potrebbe bloccare la riproduzione da altri siti o il contenuto è protetto. Prova ad ${open}.`;
+    msg.className = "bad";
+  }
+  const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const escapeAttr = (s) => /^https?:\/\//i.test(s) ? escapeHtml(s) : "#";
+
+  // ---- lists ----
+  function remember(url, kind) {
+    const list = load().filter((x) => x.url !== url);
+    list.unshift({ url, kind }); save(list); renderRecent();
+  }
+  function row(kind, url) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "item"; b.title = url;
+    b.innerHTML = `<span class="kind"></span><span class="u"></span>`;
+    b.children[0].textContent = kind; b.children[1].textContent = url;
+    b.onclick = () => { input.value = url; play(url); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    li.appendChild(b); return li;
+  }
+  function renderRecent() {
+    const ul = $("recent"); ul.innerHTML = "";
+    const list = load();
+    if (!list.length) { ul.innerHTML = `<li class="none">I link che guardi compaiono qui.</li>`; return; }
+    list.forEach((x) => ul.appendChild(row(x.kind, x.url)));
+  }
+  SAMPLES.forEach(([k, u]) => $("samples").appendChild(row(k, u)));
+  renderRecent();
+
+  // ---- input ----
+  $("f").addEventListener("submit", (e) => { e.preventDefault(); if (input.value.trim()) play(input.value); else input.focus(); });
+  $("clear").onclick = () => { save([]); renderRecent(); };
+  $("pasteBtn").onclick = async () => {
+    try { const t = await navigator.clipboard.readText(); if (t) { input.value = t.trim(); play(t); } }
+    catch { input.focus(); say("Tieni premuto nel campo e scegli Incolla."); }
+  };
+  document.addEventListener("paste", (e) => {
+    if (e.target === input) { setTimeout(() => input.value.trim() && play(input.value), 0); return; }
+    const t = (e.clipboardData || window.clipboardData).getData("text");
+    if (t && /^https?:\/\//i.test(t.trim())) { input.value = t.trim(); play(t); }
+  });
+
+  // Link passato come ?v=... (es. da una scorciatoia)
+  const qs = new URLSearchParams(location.search).get("v");
+  if (qs) { input.value = qs; play(qs); }
+})();
+</script>
+</body>
+</html>
