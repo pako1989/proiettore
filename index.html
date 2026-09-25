@@ -275,27 +275,45 @@
   // ---- ricerca dei video dentro una pagina web ----
   // Il browser non può leggere pagine di altri siti da solo: passa da un servizio di lettura pubblico.
   const PROXIES = [
-    (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
-    (u) => "https://corsproxy.io/?url=" + encodeURIComponent(u),
-    (u) => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
+    { name: "allorigins", url: (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u) },
+    { name: "allorigins-json", url: (u) => "https://api.allorigins.win/get?url=" + encodeURIComponent(u), json: "contents" },
+    { name: "jina", url: (u) => "https://r.jina.ai/" + u, headers: { "X-Return-Format": "html" } },
+    { name: "jina-testo", url: (u) => "https://r.jina.ai/" + u, backup: true },
+    { name: "codetabs", url: (u) => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u) },
+    { name: "corsproxy", url: (u) => "https://corsproxy.io/?url=" + encodeURIComponent(u) },
+    { name: "everyorigin", url: (u) => "https://everyorigin.jcubic.pl/get?url=" + encodeURIComponent(u), json: "contents" },
   ];
   let scanId = 0;
 
+  // Prova tutti i servizi insieme e usa il primo che risponde.
   async function fetchPage(url) {
-    for (const proxy of PROXIES) {
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 12000);
+    const ctls = [];
+    const attempt = async (p) => {
+      const ctl = new AbortController(); ctls.push(ctl);
+      const timer = setTimeout(() => ctl.abort(), 15000);
       try {
-        const r = await fetch(proxy(url), { signal: ctl.signal });
-        if (!r.ok) continue;
+        let r;
+        try { r = await fetch(p.url(url), { signal: ctl.signal, headers: p.headers || {} }); }
+        catch (e) { throw new Error(p.name + ": " + (e.name === "AbortError" ? "troppo lento" : "bloccato")); }
+        if (!r.ok) throw new Error(p.name + ": errore " + r.status);
         const type = r.headers.get("content-type") || "";
         const size = +r.headers.get("content-length") || 0;
-        if (/^(video|audio)\//.test(type) || /mpegurl|dash\+xml/.test(type) || size > 5e6) { ctl.abort(); return { media: true }; }
-        const text = await r.text();
-        if (text) return { text };
-      } catch {} finally { clearTimeout(timer); }
+        if (!p.json && (/^(video|audio)\//.test(type) || /mpegurl|dash\+xml/.test(type) || size > 5e6)) return { media: true };
+        let text = await r.text();
+        if (p.json) { try { text = JSON.parse(text)[p.json] || ""; } catch { text = ""; } }
+        if (!text || text.length < 50) throw new Error(p.name + ": risposta vuota");
+        return { text, via: p.name };
+      } finally { clearTimeout(timer); }
+    };
+    const failed = [];
+    for (const group of [PROXIES.filter((p) => !p.backup), PROXIES.filter((p) => p.backup)]) {
+      try {
+        const res = await Promise.any(group.map(attempt));
+        ctls.forEach((c) => c.abort());
+        return res;
+      } catch (agg) { failed.push(...(agg.errors || []).map((e) => e.message)); }
     }
-    return null;
+    return { failed };
   }
 
   function extract(html, base) {
@@ -334,11 +352,11 @@
     say("Cerco i video dentro la pagina…");
     const res = await fetchPage(url);
     if (id !== scanId) return;
-    if (!res || res.media) {
-      if (!res) say("Non riesco a leggere la pagina. Provo ad aprire il link come video…");
-      if (!res) { play(url, true); return; }
-      say("Il link è un file video ma il browser non riesce a riprodurlo.", true); return;
+    if (res.failed) {
+      say("Non riesco a leggere la pagina: nessun servizio di lettura ha risposto. Dettagli: " + res.failed.join(", "), true);
+      return;
     }
+    if (res.media) { play(url, true); return; }
     const list = extract(res.text, url);
     if (id !== scanId) return;
     if (!list.length) {
