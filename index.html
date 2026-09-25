@@ -34,7 +34,7 @@
     padding-inline: max(16px, env(safe-area-inset-left, 0px));
     padding-block: max(16px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-bottom, 0px));
   }
-  .wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 18px; }
+  .wrap { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
   header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   h1 span { color: var(--accent); }
@@ -78,8 +78,9 @@
   #msg.bad { color: var(--bad); }
   #msg a { color: var(--accent); }
 
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+  .cols > section, #found, ul, li, .item .u { min-width: 0; }
+  @media (max-width: 720px) { .cols { grid-template-columns: minmax(0, 1fr); } }
   section h2 { margin: 0 0 8px; font-size: 12px; font-weight: 500; font-family: var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
   ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
   .item {
@@ -247,7 +248,9 @@
     v.controls = true; v.autoplay = true; v.playsInline = true;
     screen.appendChild(v);
     v.addEventListener("playing", () => say("In riproduzione."), { once: true });
-    v.addEventListener("error", () => failed(info), { once: true });
+    v.addEventListener("error", () => {
+      if (info.kind === "File" && !forceDirect) scan(raw.trim()); else failed(info);
+    }, { once: true });
 
     if (info.kind === "HLS") {
       if (window.Hls && Hls.isSupported()) {
@@ -302,7 +305,7 @@
       if (!raw) return;
       let u;
       try { u = new URL(raw.trim(), base).href; } catch { return; }
-      if (!/^https?:/.test(u) || u === base) return;
+      if (!/^https?:/.test(u) || u.split(/[?#]/)[0] === base.split(/[?#]/)[0]) return;
       const info = detect(u);
       if (!info || (info.kind === "File" && !info.direct)) return;
       if (!found.has(u)) found.set(u, info.kind);
@@ -333,7 +336,8 @@
     if (id !== scanId) return;
     if (!res || res.media) {
       if (!res) say("Non riesco a leggere la pagina. Provo ad aprire il link come video…");
-      play(url, true); return;
+      if (!res) { play(url, true); return; }
+      say("Il link è un file video ma il browser non riesce a riprodurlo.", true); return;
     }
     const list = extract(res.text, url);
     if (id !== scanId) return;
@@ -342,7 +346,7 @@
       return;
     }
     showFound(list);
-    if (list.length === 1) { play(list[0].url); say("Ho trovato un video nella pagina e lo sto aprendo."); }
+    if (list.length === 1) { play(list[0].url, true); say("Ho trovato un video nella pagina e lo sto aprendo."); }
     else say(`Ho trovato ${list.length} video nella pagina: tocca quello che vuoi guardare.`);
   }
 
@@ -368,7 +372,7 @@
     b.type = "button"; b.className = "item"; b.title = url;
     b.innerHTML = `<span class="kind"></span><span class="u"></span>`;
     b.children[0].textContent = kind; b.children[1].textContent = url;
-    b.onclick = () => { if (!keepPage) { input.value = url; showFound([]); } play(url); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    b.onclick = () => { if (!keepPage) { input.value = url; showFound([]); } play(url, keepPage); window.scrollTo({ top: 0, behavior: "smooth" }); };
     li.appendChild(b); return li;
   }
   function renderRecent() {
