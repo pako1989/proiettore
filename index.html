@@ -112,6 +112,17 @@
   #chanFilter { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 14px var(--display); margin-bottom: 8px; }
   .scroll { max-height: 420px; overflow-y: auto; }
   .item img { flex: none; width: 28px; height: 28px; object-fit: contain; border-radius: 4px; background: #fff1; }
+  .ctrl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .ctrl button, .ctrl .pick { padding: 9px 12px; font: 600 13px var(--display); border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  .ctrl select { background: transparent; color: var(--text); border: 0; font: inherit; }
+  .ctrl select option { background: var(--panel); }
+  .pick input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .groups { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 4px; }
+  .groups button { flex: none; padding: 6px 10px; font-size: 12px; border-radius: 999px; }
+  .groups button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .chanopts { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .item.broken { opacity: .5; }
   @media (prefers-reduced-motion: no-preference) { .item, button { transition: background .15s, filter .15s; } }
 </style>
 </head>
@@ -147,6 +158,20 @@
     </div>
   </div>
 
+  <div class="ctrl" id="ctrl" hidden>
+    <button id="back10" type="button" aria-label="Indietro di 10 secondi">⟲ 10 s</button>
+    <button id="fwd10" type="button" aria-label="Avanti di 10 secondi">10 s ⟳</button>
+    <label class="pick">Velocità
+      <select id="speed">
+        <option value="0.5">0,5×</option><option value="0.75">0,75×</option><option value="1" selected>1×</option>
+        <option value="1.25">1,25×</option><option value="1.5">1,5×</option><option value="2">2×</option>
+      </select>
+    </label>
+    <button id="pipBtn" type="button" hidden>⧉ Finestra mobile</button>
+    <label class="pick">Sottotitoli…<input id="subFile" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip"></label>
+    <button id="restartBtn" type="button" hidden>↺ Dall'inizio</button>
+  </div>
+
   <div class="status">
     <span class="chip" id="kind">—</span>
     <span id="msg"></span>
@@ -155,6 +180,8 @@
   <section id="chan" hidden>
     <h2>Canali <span id="chanCount"></span></h2>
     <input id="chanFilter" type="search" placeholder="Cerca un canale…" aria-label="Cerca un canale">
+    <div class="groups" id="groups" role="group" aria-label="Categorie"></div>
+    <label class="chanopts"><input id="hideBroken" type="checkbox"> Nascondi i canali che non sono partiti</label>
     <ul id="chanList" class="scroll"></ul>
   </section>
 
@@ -179,6 +206,7 @@
         <div><b>File diretti</b> .mp4 .webm .mov .ogg .mp3 · <b>Stream HLS</b> .m3u8 · <b>DASH</b> .mpd</div>
         <div><b>Pagine web</b>: se incolli il link di una pagina, l'app cerca i video al suo interno (stream, file e player incorporati).</div>
         <div><b>Liste di canali</b> .m3u: le apre e ti fa scegliere il canale. <b>Trasmetti alla TV</b> funziona con Chromecast sulla stessa rete Wi-Fi.</div>
+        <div><b>Lettore</b>: riprende da dove eri rimasto, velocità, ±10 secondi (anche con doppio tocco ai lati del video), finestra mobile e sottotitoli .srt dal telefono.</div>
         <div>Non funzionano i contenuti protetti (Netflix, Prime, Disney+, RaiPlay con DRM) né i siti che vietano l'incorporamento.</div>
       </div>
     </section>
@@ -264,7 +292,7 @@
     if (hls) { hls.destroy(); hls = null; }
     if (dash) { dash.reset(); dash = null; }
     screen.querySelectorAll("video, iframe").forEach((el) => { if (el.pause) el.pause(); el.remove(); });
-    $("castBtn").hidden = true; current = null;
+    $("castBtn").hidden = true; $("ctrl").hidden = true; $("restartBtn").hidden = true; $("subFile").value = ""; current = null;
     emptyEl.hidden = true;
   }
   function say(text, bad) { msg.textContent = text; msg.className = bad ? "bad" : ""; }
@@ -296,7 +324,10 @@
     screen.appendChild(v);
     current = { v, info };
     if ("remote" in v) $("castBtn").hidden = false;
-    v.addEventListener("playing", () => say("In riproduzione."), { once: true });
+    $("ctrl").hidden = false;
+    $("pipBtn").hidden = !(document.pictureInPictureEnabled && v.requestPictureInPicture);
+    setupVideo(v, info);
+    v.addEventListener("playing", () => { say(resumedAt ? `Ripreso da ${fmt(resumedAt)}.` : "In riproduzione."); resumedAt = 0; markChannel(info.src, true); }, { once: true });
     v.addEventListener("error", () => {
       if (info.kind === "File" && !forceDirect) scan(raw.trim()); else failed(info);
     }, { once: true });
@@ -451,20 +482,46 @@
     if (/#EXT-X-(TARGETDURATION|STREAM-INF|MEDIA-SEQUENCE)/.test(text)) { play(url, true, "HLS"); return; }
     channels = parseM3U(text, url);
     if (!channels.length) { say("La lista è vuota o non è una lista di canali.", true); return; }
-    $("chanFilter").value = "";
-    renderChannels();
+    $("chanFilter").value = ""; group = "";
+    renderGroups(); renderChannels();
     $("chan").hidden = false;
     say(`Lista caricata: ${channels.length} canali. Toccane uno per guardarlo.`);
   }
+  const GROUP_IT = { General: "Generalisti", News: "Notizie", Sports: "Sport", Kids: "Bambini", Music: "Musica", Movies: "Film", Entertainment: "Intrattenimento", Religious: "Religione", Documentary: "Documentari", Lifestyle: "Stile di vita", Culture: "Cultura", Education: "Educazione", Shop: "Televendite", Comedy: "Comicità", Series: "Serie", Travel: "Viaggi", Cooking: "Cucina", Business: "Economia", Weather: "Meteo", Science: "Scienza", Undefined: "Altro", Legislative: "Istituzioni", Outdoor: "Natura", Classic: "Classici", Animation: "Animazione", Auto: "Motori", Family: "Famiglia", Relax: "Relax" };
+  const groupName = (g) => GROUP_IT[g] || g || "Altro";
+  let group = "";
+  function renderGroups() {
+    const counts = {};
+    channels.forEach((c) => { const g = groupName(c.group); counts[g] = (counts[g] || 0) + 1; });
+    const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    const box = $("groups"); box.innerHTML = "";
+    if (names.length < 2) return;
+    ["", ...names].forEach((g) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = g ? `${g} ${counts[g]}` : "Tutti";
+      b.setAttribute("aria-pressed", String(g === group));
+      b.onclick = () => { group = g; renderGroups(); renderChannels(); };
+      box.appendChild(b);
+    });
+  }
   function renderChannels() {
     const q = $("chanFilter").value.trim().toLowerCase();
-    const list = q ? channels.filter((c) => (c.name + " " + c.group).toLowerCase().includes(q)) : channels;
+    const broken = loadBroken(), hide = $("hideBroken").checked;
+    let list = channels.filter((c) => (!group || groupName(c.group) === group) && (!q || (c.name + " " + c.group).toLowerCase().includes(q)));
+    if (hide) list = list.filter((c) => !broken.has(c.url));
+    else list = [...list.filter((c) => !broken.has(c.url)), ...list.filter((c) => broken.has(c.url))];
     const ul = $("chanList"); ul.innerHTML = "";
-    list.slice(0, 300).forEach((c) => ul.appendChild(row(c.group || "TV", c.url, true, c.name, c.logo)));
+    list.slice(0, 300).forEach((c) => {
+      const bad = broken.has(c.url);
+      const li = row(bad ? "Non va" : groupName(c.group), c.url, true, c.name, c.logo);
+      if (bad) li.firstChild.classList.add("broken");
+      ul.appendChild(li);
+    });
     if (!list.length) ul.innerHTML = `<li class="none">Nessun canale trovato.</li>`;
-    $("chanCount").textContent = q ? `(${list.length} di ${channels.length})` : `(${channels.length})`;
+    $("chanCount").textContent = list.length !== channels.length ? `(${list.length} di ${channels.length})` : `(${channels.length})`;
   }
   $("chanFilter").addEventListener("input", renderChannels);
+  $("hideBroken").addEventListener("change", renderChannels);
   $("tvBtn").onclick = () => { input.value = TV_LIST; go(TV_LIST); };
 
   // ---- trasmetti alla TV ----
@@ -518,7 +575,88 @@
     });
   }
 
+  // ---- lettore: posizione, velocità, salti, finestra mobile, sottotitoli ----
+  const PKEY = "proiettore.posizioni";
+  const loadPos = () => { try { return JSON.parse(localStorage.getItem(PKEY)) || {}; } catch { return {}; } };
+  const savePos = (m) => { try { localStorage.setItem(PKEY, JSON.stringify(m)); } catch {} };
+  const fmt = (t) => { t = Math.floor(t); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
+  let resumedAt = 0;
+
+  function setupVideo(v, info) {
+    const key = info.src;
+    v.playbackRate = +$("speed").value;
+    v.addEventListener("ratechange", () => { if (v.playbackRate !== +$("speed").value) v.playbackRate = +$("speed").value; });
+    v.addEventListener("loadedmetadata", () => {
+      v.playbackRate = +$("speed").value;
+      const saved = loadPos()[key];
+      if (saved && isFinite(v.duration) && saved.t > 10 && saved.t < v.duration - 15) {
+        v.currentTime = saved.t; resumedAt = saved.t; $("restartBtn").hidden = false;
+      }
+    }, { once: true });
+    let last = 0;
+    v.addEventListener("timeupdate", () => {
+      if (!isFinite(v.duration) || v.duration < 60) return;
+      const now = Date.now(); if (now - last < 4000) return; last = now;
+      const m = loadPos();
+      if (v.currentTime > 10 && v.currentTime < v.duration - 15) m[key] = { t: Math.floor(v.currentTime), at: now };
+      else delete m[key];
+      const keys = Object.keys(m).sort((a, b) => m[b].at - m[a].at);
+      keys.slice(60).forEach((k) => delete m[k]);
+      savePos(m);
+    });
+    v.addEventListener("dblclick", (e) => {
+      const r = v.getBoundingClientRect(), x = e.clientX - r.left;
+      if (x < r.width / 3) skip(-10); else if (x > r.width * 2 / 3) skip(10);
+    });
+  }
+  function skip(sec) {
+    if (!current) return;
+    const v = current.v;
+    const end = isFinite(v.duration) ? v.duration : (v.seekable.length ? v.seekable.end(v.seekable.length - 1) : Infinity);
+    v.currentTime = Math.max(0, Math.min(end, v.currentTime + sec));
+    say(sec > 0 ? "Avanti di 10 secondi." : "Indietro di 10 secondi.");
+  }
+  $("back10").onclick = () => skip(-10);
+  $("fwd10").onclick = () => skip(10);
+  $("speed").onchange = () => { if (current) current.v.playbackRate = +$("speed").value; say("Velocità " + $("speed").selectedOptions[0].textContent); };
+  $("restartBtn").onclick = () => { if (current) { current.v.currentTime = 0; current.v.play().catch(() => {}); } $("restartBtn").hidden = true; say("Riparto dall'inizio."); };
+  $("pipBtn").onclick = async () => {
+    if (!current) return;
+    try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await current.v.requestPictureInPicture(); }
+    catch { say("La finestra mobile non è disponibile per questo video.", true); }
+  };
+  $("subFile").addEventListener("change", async () => {
+    const f = $("subFile").files[0];
+    if (!f || !current) return;
+    const buf = await f.arrayBuffer();
+    let text;
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(buf); } catch { text = new TextDecoder("windows-1252").decode(buf); }
+    text = text.replace(/^\uFEFF/, "").replace(/\r/g, "");
+    if (!/^WEBVTT/.test(text)) text = "WEBVTT\n\n" + text.replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
+    const v = current.v;
+    v.querySelectorAll("track").forEach((t) => t.remove());
+    const tr = document.createElement("track");
+    tr.kind = "subtitles"; tr.label = f.name; tr.srclang = "it"; tr.default = true;
+    tr.src = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+    v.appendChild(tr);
+    tr.addEventListener("load", () => { tr.track.mode = "showing"; });
+    tr.track.mode = "showing";
+    say("Sottotitoli caricati: " + f.name);
+  });
+
+  // ---- canali che non partono ----
+  const BKEY = "proiettore.canali-ko";
+  const loadBroken = () => { try { return new Set(JSON.parse(localStorage.getItem(BKEY)) || []); } catch { return new Set(); } };
+  function markChannel(src, ok) {
+    if (!src || !channels.some((c) => c.url === src)) return;
+    const b = loadBroken();
+    if (ok ? !b.delete(src) : b.has(src) || !b.add(src)) return;
+    try { localStorage.setItem(BKEY, JSON.stringify([...b].slice(-2000))); } catch {}
+    if (!$("chan").hidden) renderChannels();
+  }
+
   function failed(info, detail) {
+    markChannel(info.src, false);
     const open = `<a href="${escapeAttr(input.value.trim())}" target="_blank" rel="noopener">aprirlo nella sua pagina</a>`;
     if (info.kind === "File" || info.kind === "Audio")
       msg.innerHTML = `Non riesco a riprodurre questo link: il formato non è supportato dal browser oppure il sito blocca la visione altrove. Prova ad ${open}.`;
@@ -598,3 +736,4 @@
 </script>
 </body>
 </html>
+
